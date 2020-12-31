@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Dota2 Announcer</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="lib/element-ui.css">
+    <style>
+        body {
+            font-family: "Helvetica";
+        }
+        .banner {
+            background-color: #66b1ff;
+            width: 100%;
+            height: 100%;
+        }
+        .banner span {
+            padding-left: 10px;
+            display: flex;
+            height: inherit;
+            align-items: center;
+            font-size: x-large;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <el-container>
+        <el-header>
+            <div class="banner"><span>Dota2 Announcer</span></div>
+        </el-header>
+        <el-main>
+            <el-tabs type="border-card" v-if="visible">
+                <el-tab-pane label="Runes">
+                    <el-tabs tab-position="left">
+                        <el-tab-pane label="Bounty Rune">
+                            <notify-config :config="settings.bounty_rune" @do-save="save"/>
+                        </el-tab-pane>
+                        <el-tab-pane label="Power Runes">
+                            <notify-config :config="settings.power_rune" @do-save="save"/>
+                        </el-tab-pane>
+                    </el-tabs>
+                </el-tab-pane>
+                <el-tab-pane label="Items">
+                    <el-tabs tab-position="left">
+                        <el-tab-pane label="Tomb of knowledge">
+                            <notify-config :config="settings.tomb_of_knowledge" @do-save="save"/>
+                        </el-tab-pane>
+                        <el-tab-pane label="Observer ward">
+                            <notify-config :config="settings.observer_wards" @do-save="save"/>
+                        </el-tab-pane>
+                        <el-tab-pane label="Neutral Items">
+                            <notify-config :config="settings.neutral_items" @do-save="save"/>
+                        </el-tab-pane>
+                    </el-tabs>
+                </el-tab-pane>
+                <el-tab-pane label="Gold">
+                    <el-tabs tab-position="left">
+                        <el-tab-pane label="Buyback ready">
+                            <notify-config :config="settings.buyback_ready" @do-save="save"/>
+                        </el-tab-pane>
+                    </el-tabs>
+                </el-tab-pane>
+                <el-tab-pane label="Settings">
+                    <el-form v-if="settings.global" label-position="right" label-width="200px" :model="settings.global">
+                        <el-row type="flex">
+                            <el-col :span="6">
+                                <el-form-item label="Suspend All Announcers">
+                                    <el-switch v-model="settings.global.suspend_all"/>
+                                </el-form-item>
+                                <el-form-item label="Volume">
+                                    <div style="width: 200px">
+                                        <el-slider v-model="settings.global.volume" :min="0" :max="1" :step="0.01" :format-tooltip="function(v){return Math.round(v*100);}"></el-slider>
+                                    </div>
+                                </el-form-item>
+                                <el-form-item>
+                                    <el-button type="primary" @click="save">Save</el-button>
+                                </el-form-item>
+                            </el-col>
+                            <el-col :span="6">
+                                <install/>
+                            </el-col>
+                        </el-row>
+                    </el-form>
+                </el-tab-pane>
+                <el-tab-pane label="About"></el-tab-pane>
+            </el-tabs>
+        </el-main>
+        <el-footer>
+        </el-footer>
+    </el-container>
+</div>
+</body>
+<script src="lib/axios.min.js"></script>
+<script src="lib/vue.js"></script>
+<script src="lib/element-ui.js"></script>
+<script src="main.js"></script>
+<script>
+    let app = new Vue({
+        el: '#app',
+        data: {
+            visible: false,
+            settings: {
+                global: {},
+                bounty_rune: {},
+                power_rune: {},
+                tomb_of_knowledge: {},
+                observer_wards: {},
+                neutral_items: {},
+                buyback_ready: {}
+            },
+        },
+        methods: {
+            async save() {
+                try {
+                    await axios.post('/api/settings', this.settings)
+                    this.$message({
+                        showClose: true,
+                        message: 'Settings saved',
+                        type: 'success'
+                    });
+                } catch (e) {
+                    this.$message({
+                        showClose: true,
+                        message: 'Unable to save settings',
+                        type: 'error'
+                    });
+                    console.error("Failed to save settings", e)
+                }
+            },
+        },
+        async beforeCreate() {
+            const loading = this.$loading({
+                lock: true,
+                text: 'Loading . . .',
+                background: 'rgba(255, 255, 255, 0.6)'
+            });
+            try {
+                this.settings = (await axios.get('/api/settings')).data;
+            } catch (e) {
+                this.$message({
+                    showClose: true,
+                    message: 'Unable to load settings',
+                    type: 'error'
+                });
+                console.error("Failed to load settings", e)
+            }
+            this.visible = true
+            loading.close()
+        },
+    })
+</script>
+</html>
+
