@@ -9,6 +9,7 @@
             font-family: "Helvetica";
         }
         .banner {
+            display: flex;
             background-color: #66b1ff;
             width: 100%;
             height: 100%;
@@ -21,13 +22,18 @@
             font-size: x-large;
             color: white;
         }
+        .banner .version {
+            margin-left: auto;
+            padding-right: 10px;
+            font-size: large;
+        }
     </style>
 </head>
 <body>
 <div id="app">
     <el-container>
         <el-header>
-            <div class="banner"><span>Dota2 Announcer</span></div>
+            <div class="banner"><span>Dota2 Announcer</span><span class="version">v{{version}}</span></div>
         </el-header>
         <el-main>
             <el-tabs type="border-card" v-if="visible">
@@ -100,6 +106,7 @@
         el: '#app',
         data: {
             visible: false,
+            version: "",
             settings: {
                 global: {},
                 bounty_rune: {},
@@ -136,7 +143,9 @@
                 background: 'rgba(255, 255, 255, 0.6)'
             });
             try {
-                this.settings = (await axios.get('/api/settings')).data;
+                let res = await axios.get('/api/settings')
+                this.version = res.headers['x-version'];
+                this.settings = res.data;
             } catch (e) {
                 this.$message({
                     showClose: true,

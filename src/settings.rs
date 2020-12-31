@@ -154,12 +154,25 @@ pub struct SpawnConfig {
 
 impl SpawnConfig {
     fn can_invoke_action(&self, clock_time: i32) -> bool {
-        if !self.notify.enabled || clock_time < self.spawn.first_sec as i32 {
+        if !self.notify.enabled {
             return false;
         }
 
-        let interval_reminder = clock_time % self.spawn.interval_sec as i32;
-        let action_reminder = (self.spawn.interval_sec - self.notify.before_sec) as i32;
+        let first_notify = self.spawn.first_sec as i32 - self.notify.before_sec as i32;
+        if clock_time < first_notify {
+            return false;
+        }
+
+        if clock_time == first_notify {
+            return true;
+        }
+
+        let interval_reminder =
+            (clock_time - self.spawn.first_sec as i32) % self.spawn.interval_sec as i32;
+
+        let action_reminder =
+            ((self.spawn.interval_sec - self.notify.before_sec) % self.spawn.interval_sec) as i32;
+
         interval_reminder == action_reminder
     }
 }
@@ -238,5 +251,106 @@ impl Default for NotifyAction {
             duration_ms: 100,
             freq: 400,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::settings::{NotifyAction, NotifyInfo, SpawnConfig, SpawnInfo};
+
+    fn new_sc(enabled: bool, before_sec: u16, first_sec: u16, interval_sec: u16) -> SpawnConfig {
+        SpawnConfig {
+            notify: NotifyInfo {
+                enabled,
+                before_sec,
+                action: NotifyAction::default(),
+            },
+            spawn: SpawnInfo {
+                first_sec,
+                interval_sec,
+            },
+        }
+    }
+
+    #[test]
+    fn not_enabled_config() {
+        let cfg = new_sc(false, 0, 0, 10);
+        assert_eq!(cfg.can_invoke_action(-1), false);
+        assert_eq!(cfg.can_invoke_action(0), false);
+        assert_eq!(cfg.can_invoke_action(1), false);
+    }
+
+    #[test]
+    fn first_sec_0_before_sec_0() {
+        let cfg = new_sc(true, 0, 0, 10);
+        assert_eq!(cfg.can_invoke_action(-1), false);
+        assert_eq!(cfg.can_invoke_action(0), true);
+        assert_eq!(cfg.can_invoke_action(1), false);
+
+        assert_eq!(cfg.can_invoke_action(9), false);
+        assert_eq!(cfg.can_invoke_action(10), true);
+        assert_eq!(cfg.can_invoke_action(11), false);
+
+        assert_eq!(cfg.can_invoke_action(19), false);
+        assert_eq!(cfg.can_invoke_action(20), true);
+        assert_eq!(cfg.can_invoke_action(21), false);
+    }
+
+    #[test]
+    fn first_sec_0_before_sec_2() {
+        let cfg = new_sc(true, 2, 0, 10);
+        assert_eq!(cfg.can_invoke_action(-3), false);
+        assert_eq!(cfg.can_invoke_action(-2), true);
+        assert_eq!(cfg.can_invoke_action(-1), false);
+        assert_eq!(cfg.can_invoke_action(0), false);
+
+        assert_eq!(cfg.can_invoke_action(7), false);
+        assert_eq!(cfg.can_invoke_action(8), true);
+        assert_eq!(cfg.can_invoke_action(9), false);
+        assert_eq!(cfg.can_invoke_action(10), false);
+
+        assert_eq!(cfg.can_invoke_action(17), false);
+        assert_eq!(cfg.can_invoke_action(18), true);
+        assert_eq!(cfg.can_invoke_action(19), false);
+        assert_eq!(cfg.can_invoke_action(20), false);
+    }
+
+    #[test]
+    fn first_sec_5_before_sec_0() {
+        let cfg = new_sc(true, 0, 5, 10);
+        assert_eq!(cfg.can_invoke_action(-1), false);
+        assert_eq!(cfg.can_invoke_action(0), false);
+
+        assert_eq!(cfg.can_invoke_action(4), false);
+        assert_eq!(cfg.can_invoke_action(5), true);
+        assert_eq!(cfg.can_invoke_action(6), false);
+
+        assert_eq!(cfg.can_invoke_action(10), false);
+
+        assert_eq!(cfg.can_invoke_action(14), false);
+        assert_eq!(cfg.can_invoke_action(15), true);
+        assert_eq!(cfg.can_invoke_action(16), false);
+    }
+
+    #[test]
+    fn first_sec_5_before_sec_2() {
+        let cfg = new_sc(true, 2, 5, 10);
+        assert_eq!(cfg.can_invoke_action(-2), false);
+        assert_eq!(cfg.can_invoke_action(0), false);
+
+        assert_eq!(cfg.can_invoke_action(2), false);
+        assert_eq!(cfg.can_invoke_action(3), true);
+        assert_eq!(cfg.can_invoke_action(4), false);
+        assert_eq!(cfg.can_invoke_action(5), false);
+        assert_eq!(cfg.can_invoke_action(6), false);
+
+        assert_eq!(cfg.can_invoke_action(8), false);
+        assert_eq!(cfg.can_invoke_action(10), false);
+
+        assert_eq!(cfg.can_invoke_action(12), false);
+        assert_eq!(cfg.can_invoke_action(13), true);
+        assert_eq!(cfg.can_invoke_action(14), false);
+        assert_eq!(cfg.can_invoke_action(15), false);
+        assert_eq!(cfg.can_invoke_action(16), false);
     }
 }

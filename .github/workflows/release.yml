@@ -1,0 +1,66 @@
+name: Release
+
+# create release on push to the version 'v*' tag (e.g.: v1.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Prepare 'msys2' with MINGW64
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        path-type: inherit
+        release: false
+        update: false
+
+    - name: Build MSVC
+      run: |
+        rustup default stable-x86_64-pc-windows-msvc
+        cargo build --release --verbose --target x86_64-pc-windows-msvc
+
+    - name: Build GNU
+      run: |
+        rustup default stable-x86_64-pc-windows-gnu
+        cargo build --release --verbose --target x86_64-pc-windows-gnu
+      shell: msys2 {0}
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: true
+        prerelease: false
+
+    - name: Upload Release Asset MSVC
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./target/x86_64-pc-windows-msvc/release/dota2announcer.exe
+        asset_name: dota2announcer.exe
+        asset_content_type: application/vnd.microsoft.portable-executable
+
+    - name: Upload Release Asset GNU
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./target/x86_64-pc-windows-gnu/release/dota2announcer.exe
+        asset_name: dota2announcer_gnu.exe
+        asset_content_type: application/vnd.microsoft.portable-executable

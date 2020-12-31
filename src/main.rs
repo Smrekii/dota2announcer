@@ -20,7 +20,7 @@ use crate::game::{get_dota2_dir, DotaDir, Game, GAME_STATE_INTEGRATION_FILE_NAME
 use crate::settings::{NotifyAction, OnClock, Settings};
 use rocket::fairing::AdHoc;
 use rocket::figment::Figment;
-use rocket::http::Status;
+use rocket::http::{Header, Status};
 use rocket::logger::LogLevel;
 use rocket::response::status::Custom;
 use rocket::response::{Debug, Redirect};
@@ -30,17 +30,26 @@ use serde_json::Value;
 use std::fs::File;
 use std::io;
 use std::io::Write;
+use std::ops::{Deref, DerefMut};
 use std::sync::Mutex;
 use std::thread::spawn;
 use systray::Application;
+
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 #[derive(RustEmbed, Clone)]
 #[folder = "$CARGO_MANIFEST_DIR/web"]
 struct Asset;
 
+struct Runtime {
+    player: AudioPlayer,
+    settings: Mutex<Settings>,
+    last_buyback: Mutex<bool>,
+}
+
 #[post("/", format = "json", data = "<state>")]
-fn game_state_update(ap: State<AudioPlayer>, s: State<Mutex<Settings>>, state: Json<Game>) {
-    if let Ok(s) = s.lock() {
+fn game_state_update(r: State<Runtime>, state: Json<Game>) {
+    if let Ok(s) = r.settings.lock() {
         if s.global.suspend_all {
             return;
         }
@@ -50,20 +59,9 @@ fn game_state_update(ap: State<AudioPlayer>, s: State<Mutex<Settings>>, state: J
                 println!("{} -> {}", prev_state, map.game_state);
             }
 
-            // notify for the first rune
-            if s.bounty_rune.notify.enabled
-                && map.game_state == "DOTA_GAMERULES_STATE_PRE_GAME"
-                && map.clock_time == -(s.bounty_rune.notify.before_sec as i32)
-                && state.previously.pointer("/map/clock_time").is_some()
+            if map.game_state == "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS"
+                || map.game_state == "DOTA_GAMERULES_STATE_PRE_GAME"
             {
-                println!(
-                    "{} there are bounty runes about to spawn in {} sec",
-                    map.clock_time, s.bounty_rune.notify.before_sec
-                );
-                s.bounty_rune.notify.action.trigger(&ap);
-            }
-
-            if map.game_state == "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS" {
                 if s.buyback_ready.notify.enabled
                     && (state.previously.pointer("/player/gold_reliable").is_some()
                         || state.previously.pointer("/hero/buyback_cost").is_some()
@@ -78,8 +76,14 @@ fn game_state_update(ap: State<AudioPlayer>, s: State<Mutex<Settings>>, state: J
                         _ => false,
                     };
 
-                    if has_enough_gold && buyback_cooldown.unwrap_or_default() == 0 {
-                        s.buyback_ready.notify.action.trigger(&ap);
+                    let has_buyback = has_enough_gold && buyback_cooldown.unwrap_or_default() == 0;
+                    if let Ok(mut last_buyback) = r.last_buyback.lock() {
+                        if has_buyback && !*last_buyback.deref() {
+                            *last_buyback.deref_mut() = true;
+                            s.buyback_ready.notify.action.trigger(&r.player);
+                        } else if !has_buyback && *last_buyback.deref() {
+                            *last_buyback.deref_mut() = false;
+                        }
                     }
                 }
 
@@ -94,7 +98,7 @@ fn game_state_update(ap: State<AudioPlayer>, s: State<Mutex<Settings>>, state: J
                         "{} there are observer wards about to spawn in {} sec",
                         map.clock_time, s.observer_wards.notify.before_sec
                     );
-                    s.observer_wards.notify.action.trigger(&ap);
+                    s.observer_wards.notify.action.trigger(&r.player);
                 }
 
                 // handle OnClock actions
@@ -102,30 +106,30 @@ fn game_state_update(ap: State<AudioPlayer>, s: State<Mutex<Settings>>, state: J
                     return;
                 }
 
-                if s.bounty_rune.on_clock(map.clock_time, &ap) {
+                if s.bounty_rune.on_clock(map.clock_time, &r.player) {
                     println!(
                         "{} there are bounty runes about to spawn in {} sec",
                         map.clock_time, s.bounty_rune.notify.before_sec
                     );
                 }
 
-                if s.power_rune.on_clock(map.clock_time, &ap) {
+                if s.power_rune.on_clock(map.clock_time, &r.player) {
                     println!(
                         "{} there are power runes about to spawn in {} sec",
-                        map.clock_time, s.bounty_rune.notify.before_sec
+                        map.clock_time, s.power_rune.notify.before_sec
                     );
                 }
 
-                if s.tomb_of_knowledge.on_clock(map.clock_time, &ap) {
+                if s.tomb_of_knowledge.on_clock(map.clock_time, &r.player) {
                     println!(
                         "{} there is tomb of knowledge about to spawn in {} sec",
                         map.clock_time, s.tomb_of_knowledge.notify.before_sec
                     );
                 }
 
-                if s.neutral_items.on_clock(map.clock_time, &ap) {
+                if s.neutral_items.on_clock(map.clock_time, &r.player) {
                     println!(
-                        "{} there are neutral items can be dropped in about {} sec",
+                        "{} there are neutral items that can be dropped in about {} sec",
                         map.clock_time, s.neutral_items.notify.before_sec
                     );
                 }
@@ -140,26 +144,23 @@ async fn index() -> Redirect {
 }
 
 #[get("/settings")]
-fn settings_load(s: State<Mutex<Settings>>) -> Result<Json<Settings>, ()> {
-    match s.lock() {
+fn settings_load(r: State<Runtime>) -> Result<Json<Settings>, ()> {
+    match r.settings.lock() {
         Ok(settings) => Ok(Json(settings.clone())),
         Err(_) => Err(()),
     }
 }
 
 #[post("/settings", format = "json", data = "<settings>")]
-fn settings_save(
-    s: State<Mutex<Settings>>,
-    settings: Json<Settings>,
-    ap: State<AudioPlayer>,
-) -> Result<(), Debug<io::Error>> {
-    s.lock()
+fn settings_save(r: State<Runtime>, settings: Json<Settings>) -> Result<(), Debug<io::Error>> {
+    r.settings
+        .lock()
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Lock failed"))
         .and_then(|mut s| {
             *s = settings.into_inner();
 
             // apply volume change if any
-            ap.set_volume(s.global.volume);
+            r.player.set_volume(s.global.volume);
 
             s.save()
         })
@@ -167,8 +168,8 @@ fn settings_save(
 }
 
 #[post("/trigger", format = "json", data = "<action>")]
-fn trigger(ap: State<AudioPlayer>, action: Json<NotifyAction>) {
-    action.trigger(&ap);
+fn trigger(r: State<Runtime>, action: Json<NotifyAction>) {
+    action.trigger(&r.player);
 }
 
 #[get("/install")]
@@ -256,6 +257,12 @@ fn rocket() -> rocket::Rocket {
     let player = AudioPlayer::new();
     player.set_volume(settings.global.volume);
 
+    let runtime = Runtime {
+        player,
+        settings: Mutex::new(settings),
+        last_buyback: Mutex::new(false),
+    };
+
     rocket::custom(figment)
         .mount("/", <EmbedFiles<Asset>>::new(Options::None))
         .mount("/", routes![index, game_state_update, integration_file])
@@ -263,11 +270,16 @@ fn rocket() -> rocket::Rocket {
             "/api",
             routes![settings_load, settings_save, trigger, install, install_post],
         )
-        .manage(player)
-        .manage(Mutex::new(settings))
+        .manage(runtime)
+        .attach(AdHoc::on_response("Version header", |_, res| {
+            Box::pin(async move {
+                res.set_header(Header::new("x-version", VERSION));
+            })
+        }))
         .attach(AdHoc::on_launch("Launch logger", |rocket| {
             println!(
-                "Running at http://{}:{}",
+                "v{} Running at http://{}:{}",
+                VERSION,
                 rocket.config().address,
                 rocket.config().port
             );
